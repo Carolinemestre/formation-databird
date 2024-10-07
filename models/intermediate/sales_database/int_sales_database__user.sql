@@ -1,32 +1,45 @@
-with order_item_grouped_by_order as (
+WITH  orders_summary AS (
+SELECT
+ o.user_id,
+ SUM((oi.unit_price * item_quantity) + oi.shipping_cost) AS total_amount_spent,
+ SUM(oi.item_quantity) as total_items,
+ COUNT(distinct product_id) as total_distinct_items,
+ COUNT(DISTINCT o.order_id) AS total_orders
+FROM {{ ref('stg_sales_database__order_item') }} as oi
+INNER JOIN
+{{ ref('stg_sales_database__order') }} as o
+ON oi.order_id = o.order_id
+GROUP BY
+o.user_id
+),
 
-select order_id,
-    sum(total_order_item_amount) as total_order_amount,
-    sum(item_quantity) as total_items,
-    count(distinct product_id) as total_distinct_items
-from {{ ref('stg_sales_database__order_item') }}
-group by order_id
 
-), feedback_grouped_by_order as (
-
-select order_id,
-    avg(feedback_score) as average_feedback_score
-from {{ ref('stg_sales_database__feedback') }}
-group by order_id
-
+product_summary AS (
+SELECT
+o.user_id,
+oi.product_id,
+ROW_NUMBER() OVER (
+  PARTITION BY o.user_id
+  ORDER BY SUM(item_quantity) DESC
+) AS rn
+FROM
+{{ ref('stg_sales_database__order_item') }} oi
+INNER JOIN
+{{ ref('stg_sales_database__order') }} o
+ON oi.order_id = o.order_id
+GROUP BY
+o.user_id,
+oi.product_id
 )
 
-select o.order_id,
-    o.user_id,
-    o.order_status,
-    o.order_created_at,
-    o.order_approved_at,
-    u.user_city,
-    f.average_feedback_score,
-    oi.total_order_amount,
-    oi.total_items,
-    oi.total_distinct_items
-from {{ ref('stg_sales_database__order') }} as o
-left join order_item_grouped_by_order as oi on o.order_id = io.order_id
-left join feedback_grouped_by_order as f on f.order_id = o.order_id
-left join {{ ref('stg_sales_database__user' )}} as u on u.order_id = o.order_id
+SELECT
+o.user_id,
+o.total_amount_spent,
+o.total_items,
+o.total_distinct_items,
+o.total_orders,
+p.product_id AS favorite_product_id
+FROM orders_summary o
+LEFT JOIN product_summary p
+ON o.user_id = p.user_id
+AND p.rn = 1
